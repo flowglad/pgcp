@@ -1,0 +1,34 @@
+{
+  "name": "pgcp",
+  "version": "0.1.0",
+  "description": "PostgreSQL Copy Tool - Copy databases like cp copies files",
+  "type": "module",
+  "bin": {
+    "pgcp": "./dist/pgcp.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "postgresql",
+    "postgres",
+    "supabase",
+    "database",
+    "copy",
+    "migration",
+    "cli"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}
