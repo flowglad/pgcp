@@ -337,16 +337,25 @@ interface CommandResult {
   code: number
 }
 
+interface CommandOptions {
+  silent?: boolean
+}
+
 /**
- * Run a command asynchronously, allowing the event loop to continue
- * (so spinners can animate while the command runs)
+ * Run a command asynchronously without shell interpolation.
+ * Allows the event loop to continue (so spinners can animate).
+ *
+ * @param command - The executable to run
+ * @param args - Array of arguments (no shell interpolation)
+ * @param options - Optional settings (silent mode)
  */
 function runCommandAsync(
   command: string,
-  options: { silent?: boolean } = {}
+  args: string[],
+  options: CommandOptions = {}
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn('sh', ['-c', command], {
+    const child = spawn(command, args, {
       cwd: projectDir,
       stdio: options.silent ? 'pipe' : ['inherit', 'pipe', 'pipe'],
       env: { ...process.env },
@@ -368,23 +377,30 @@ function runCommandAsync(
     })
 
     child.on('close', (code) => {
+      // Treat null exit code as failure (process was killed)
+      const exitCode = code ?? 1
       resolve({
         stdout: stdout.trim(),
         stderr: stderr.trim(),
-        code: code ?? 0,
+        code: exitCode,
       })
     })
   })
 }
 
 /**
- * Run a command that we expect to succeed, throw if it fails
+ * Run a command that we expect to succeed, throw if it fails.
+ *
+ * @param command - The executable to run
+ * @param args - Array of arguments (no shell interpolation)
+ * @param options - Optional settings (silent mode)
  */
 async function runCommand(
   command: string,
-  options: { silent?: boolean } = {}
+  args: string[],
+  options: CommandOptions = {}
 ): Promise<string> {
-  const result = await runCommandAsync(command, options)
+  const result = await runCommandAsync(command, args, options)
   if (result.code !== 0) {
     throw new Error(
       result.stderr || `Command failed with code ${result.code}`
@@ -394,18 +410,17 @@ async function runCommand(
 }
 
 /**
- * Run a command quietly and check if it succeeds (for prerequisite checks)
+ * Check if a command succeeds without throwing.
+ *
+ * @param command - The executable to run
+ * @param args - Array of arguments (no shell interpolation)
  */
-async function runCommandQuiet(command: string): Promise<string> {
-  return runCommand(command, { silent: true })
-}
-
-/**
- * Check if a command succeeds without throwing
- */
-async function commandSucceeds(command: string): Promise<boolean> {
+async function commandSucceeds(
+  command: string,
+  args: string[]
+): Promise<boolean> {
   try {
-    const result = await runCommandAsync(command, { silent: true })
+    const result = await runCommandAsync(command, args, { silent: true })
     return result.code === 0
   } catch {
     return false
@@ -558,7 +573,7 @@ async function checkPrerequisites(steps: StepCounter): Promise<void> {
   spinner.start(stepMsg)
 
   // Check Docker
-  if (!(await commandSucceeds('docker info 2>/dev/null'))) {
+  if (!(await commandSucceeds('docker', ['info']))) {
     spinner.fail(stepMsg)
     logError(
       'Docker is not running. Please start Docker and try again.'
@@ -567,7 +582,7 @@ async function checkPrerequisites(steps: StepCounter): Promise<void> {
   }
 
   // Check Supabase CLI
-  if (!(await commandSucceeds('which supabase'))) {
+  if (!(await commandSucceeds('which', ['supabase']))) {
     spinner.fail(stepMsg)
     logError('Supabase CLI is not installed.')
     logInfo('Install with: brew install supabase/tap/supabase')
@@ -575,7 +590,7 @@ async function checkPrerequisites(steps: StepCounter): Promise<void> {
   }
 
   // Check psql
-  if (!(await commandSucceeds('which psql'))) {
+  if (!(await commandSucceeds('which', ['psql']))) {
     spinner.fail(stepMsg)
     logError('psql is not installed.')
     logInfo(
@@ -585,8 +600,8 @@ async function checkPrerequisites(steps: StepCounter): Promise<void> {
   }
 
   // Check supabase/config.toml exists
-  const configPath = path.join(projectDir, 'supabase', 'config.toml')
-  if (!(await commandSucceeds(`test -f "${configPath}"`))) {
+  const supabaseConfigPath = path.join(projectDir, 'supabase', 'config.toml')
+  if (!(await commandSucceeds('test', ['-f', supabaseConfigPath]))) {
     spinner.fail(stepMsg)
     logError('Supabase is not initialized in this project.')
     logInfo('Run: supabase init')
@@ -611,16 +626,16 @@ const configBackupPath = path.join(
 
 /**
  * Backup config.toml and modify the db port.
- * Returns true if modification was made (port differs from default).
+ * Throws an error if a custom port is requested but [db].port cannot be found.
  *
  * Parses TOML line-by-line to safely handle:
  * - Comments (lines starting with #)
  * - Section headers ([db], [api], etc.)
  * - Only modifies port within the [db] section
  */
-async function modifyConfigPort(port: number): Promise<boolean> {
+async function modifyConfigPort(port: number): Promise<void> {
   if (port === CONFIG.DEFAULT_DB_PORT) {
-    return false // No modification needed
+    return // No modification needed
   }
 
   // Read current config
@@ -661,13 +676,14 @@ async function modifyConfigPort(port: number): Promise<boolean> {
   })
 
   if (!modified) {
-    // Restore backup if we didn't actually modify anything
+    // Restore backup since we couldn't modify
     await fs.unlink(configBackupPath)
-    return false
+    throw new Error(
+      `Failed to configure custom port ${port}: [db].port not found in supabase/config.toml`
+    )
   }
 
   await fs.writeFile(configPath, newLines.join('\n'))
-  return true
 }
 
 /**
@@ -695,7 +711,7 @@ async function prepareDestination(
   let stepMsg = steps.next('Stopping existing Supabase containers')
   spinner.start(stepMsg)
   try {
-    await runCommand('supabase stop --no-backup', { silent: true })
+    await runCommand('supabase', ['stop', '--no-backup'], { silent: true })
   } catch {
     // Ignore errors - containers might not be running
   }
@@ -703,7 +719,14 @@ async function prepareDestination(
 
   // Modify config.toml if using custom port
   if (port !== CONFIG.DEFAULT_DB_PORT) {
-    configWasModified = await modifyConfigPort(port)
+    try {
+      await modifyConfigPort(port)
+      configWasModified = true
+    } catch (err) {
+      spinner.fail(`Failed to configure port ${port}`)
+      logError(`${err}`)
+      process.exit(1)
+    }
   }
 
   // Start fresh Supabase
@@ -712,7 +735,7 @@ async function prepareDestination(
   )
   spinner.start(stepMsg)
   try {
-    await runCommand('supabase start', { silent: true })
+    await runCommand('supabase', ['start'], { silent: true })
   } catch (err) {
     // Restore config on failure
     if (configWasModified) {
@@ -736,9 +759,7 @@ async function prepareDestination(
   spinner.start(stepMsg)
   for (let i = 0; i < CONFIG.HEALTH_CHECK_RETRIES; i++) {
     if (
-      await commandSucceeds(
-        `psql "${getLocalDbUrl(port)}" -c "SELECT 1" 2>/dev/null`
-      )
+      await commandSucceeds('psql', [getLocalDbUrl(port), '-c', 'SELECT 1'])
     ) {
       spinner.success(
         stepMsg.replace(
@@ -780,7 +801,8 @@ async function dumpSourceDatabase(
   const rolesFile = path.join(dumpDir, `${prefix}-roles.sql`)
   try {
     await runCommand(
-      `supabase db dump --db-url "${sourceUrl}" --role-only -f "${rolesFile}"`,
+      'supabase',
+      ['db', 'dump', '--db-url', sourceUrl, '--role-only', '-f', rolesFile],
       { silent: true }
     )
   } catch (err) {
@@ -795,7 +817,8 @@ async function dumpSourceDatabase(
   const schemaFile = path.join(dumpDir, `${prefix}-schema.sql`)
   try {
     await runCommand(
-      `supabase db dump --db-url "${sourceUrl}" -f "${schemaFile}"`,
+      'supabase',
+      ['db', 'dump', '--db-url', sourceUrl, '-f', schemaFile],
       { silent: true }
     )
   } catch (err) {
@@ -811,7 +834,8 @@ async function dumpSourceDatabase(
     dataFile = path.join(dumpDir, `${prefix}-data.sql`)
     try {
       await runCommand(
-        `supabase db dump --db-url "${sourceUrl}" --data-only --use-copy -f "${dataFile}"`,
+        'supabase',
+        ['db', 'dump', '--db-url', sourceUrl, '--data-only', '--use-copy', '-f', dataFile],
         { silent: true }
       )
     } catch (err) {
@@ -840,16 +864,14 @@ function quoteIdentifier(identifier: string): string {
 async function grantRolesToPostgres(
   localDbUrl: string
 ): Promise<void> {
-  const rolesQuery = `
-    SELECT rolname FROM pg_roles
-    WHERE rolname NOT LIKE 'pg_%'
-    AND rolname != 'postgres'
-    AND NOT rolsuper
-  `.replace(/\n/g, ' ')
+  const rolesQuery =
+    "SELECT rolname FROM pg_roles WHERE rolname NOT LIKE 'pg_%' AND rolname != 'postgres' AND NOT rolsuper"
 
   try {
-    const result = await runCommandQuiet(
-      `psql "${localDbUrl}" -t -A -c "${rolesQuery}"`
+    const result = await runCommand(
+      'psql',
+      [localDbUrl, '-t', '-A', '-c', rolesQuery],
+      { silent: true }
     )
 
     const roles = result.split('\n').filter((r) => r.trim())
@@ -857,7 +879,8 @@ async function grantRolesToPostgres(
       try {
         const quotedRole = quoteIdentifier(role)
         await runCommand(
-          `psql "${localDbUrl}" -c "GRANT ${quotedRole} TO postgres;"`,
+          'psql',
+          [localDbUrl, '-c', `GRANT ${quotedRole} TO postgres;`],
           { silent: true }
         )
       } catch {
@@ -881,9 +904,7 @@ async function restoreToLocal(
   let stepMsg = steps.next('Restoring roles')
   spinner.start(stepMsg)
   try {
-    await runCommand(`psql "${localDbUrl}" -f "${rolesFile}"`, {
-      silent: true,
-    })
+    await runCommand('psql', [localDbUrl, '-f', rolesFile], { silent: true })
   } catch (err) {
     spinner.fail(stepMsg.replace('Restoring', 'Failed to restore'))
     throw err
@@ -901,7 +922,8 @@ async function restoreToLocal(
   spinner.start(stepMsg)
   try {
     await runCommand(
-      `psql "${localDbUrl}" -v ON_ERROR_STOP=1 -f "${schemaFile}"`,
+      'psql',
+      [localDbUrl, '-v', 'ON_ERROR_STOP=1', '-f', schemaFile],
       { silent: true }
     )
   } catch (err) {
@@ -916,7 +938,13 @@ async function restoreToLocal(
     spinner.start(stepMsg)
     try {
       await runCommand(
-        `psql "${localDbUrl}" -c "SET session_replication_role = replica;" -f "${dataFile}" -c "SET session_replication_role = DEFAULT;"`,
+        'psql',
+        [
+          localDbUrl,
+          '-c', 'SET session_replication_role = replica;',
+          '-f', dataFile,
+          '-c', 'SET session_replication_role = DEFAULT;',
+        ],
         { silent: true }
       )
     } catch (err) {
@@ -978,7 +1006,10 @@ async function cleanupDumpDir(): Promise<number> {
  * Handle interrupt signals (SIGINT from Ctrl+C, SIGTERM).
  * Cleans up dump files and restores config.toml before exiting.
  */
-async function handleInterrupt(signal: string): Promise<void> {
+async function handleInterrupt(
+  signal: string,
+  exitCode: number
+): Promise<void> {
   // Stop any running spinner
   spinner.stop()
 
@@ -1004,15 +1035,15 @@ async function handleInterrupt(signal: string): Promise<void> {
   }
 
   console.log('')
-  process.exit(130) // Standard exit code for SIGINT
+  process.exit(exitCode)
 }
 
 function setupSignalHandlers(): void {
   process.on('SIGINT', () => {
-    handleInterrupt('SIGINT').catch(() => process.exit(130))
+    handleInterrupt('SIGINT', 130).catch(() => process.exit(130))
   })
   process.on('SIGTERM', () => {
-    handleInterrupt('SIGTERM').catch(() => process.exit(143))
+    handleInterrupt('SIGTERM', 143).catch(() => process.exit(143))
   })
 }
 
