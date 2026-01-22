@@ -1,17 +1,17 @@
 {
   "name": "pgcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "PostgreSQL Copy Tool - Copy databases like cp copies files",
   "type": "module",
   "bin": {
-    "pgcp": "./dist/pgcp.js"
+    "pgcp": "./dist/index.js"
   },
   "files": [
     "dist"
   ],
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "bun run build"
   },
   "keywords": [
     "postgresql",
