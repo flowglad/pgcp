@@ -9,11 +9,9 @@ import path from 'path'
 import type { Provider, DumpResult, DumpOptions } from '../../types.js'
 import {
   runCommand,
-  runCommandAsync,
   commandSucceeds,
   sleep,
 } from '../../utils/commands.js'
-import { logError, logInfo } from '../../utils/logging.js'
 
 const DEFAULT_PORT = 54322
 const HEALTH_CHECK_RETRIES = 30
@@ -33,6 +31,9 @@ function getLocalDbUrl(port: number): string {
   return `postgresql://postgres:postgres@localhost:${port}/postgres`
 }
 
+// Simple line-by-line TOML modification. This handles the typical structure of
+// supabase/config.toml but won't handle edge cases like inline tables or
+// multi-line strings. We'll reach for a proper TOML parser if issues arise.
 async function modifyConfigPort(port: number): Promise<void> {
   if (port === DEFAULT_PORT) {
     return
@@ -94,6 +95,28 @@ function quoteIdentifier(identifier: string): string {
   return `"${identifier.replace(/"/g, '""')}"`
 }
 
+interface SupabaseDumpMetadata {
+  hasRoles: boolean
+  hasData: boolean
+  rolesFile: string
+  schemaFile: string
+  dataFile?: string
+}
+
+function isSupabaseDumpMetadata(
+  metadata: unknown
+): metadata is SupabaseDumpMetadata {
+  if (typeof metadata !== 'object' || metadata === null) {
+    return false
+  }
+  const m = metadata as Record<string, unknown>
+  return (
+    typeof m.rolesFile === 'string' &&
+    typeof m.schemaFile === 'string' &&
+    (m.dataFile === undefined || typeof m.dataFile === 'string')
+  )
+}
+
 async function grantRolesToPostgres(localDbUrl: string): Promise<void> {
   const rolesQuery =
     "SELECT rolname FROM pg_roles WHERE rolname NOT LIKE 'pg_%' AND rolname != 'postgres' AND NOT rolsuper"
@@ -115,11 +138,13 @@ async function grantRolesToPostgres(localDbUrl: string): Promise<void> {
           { silent: true }
         )
       } catch {
-        // Role might already be granted
+        // Expected: role might already be granted, or grant might fail for
+        // system roles. This is non-fatal - we continue with other roles.
       }
     }
   } catch {
-    // Ignore errors
+    // Expected: query might fail if no custom roles exist. This is non-fatal
+    // since granting roles is a best-effort operation for local development.
   }
 }
 
@@ -133,20 +158,26 @@ export const SupabaseProvider: Provider = {
   async checkPrerequisites(): Promise<void> {
     // Check Docker is running
     if (!(await commandSucceeds('docker', ['info']))) {
-      logError('Docker is not running. Please start Docker and try again.')
-      process.exit(1)
+      throw new Error('Docker is not running. Please start Docker and try again.')
     }
 
     // Check supabase/config.toml exists
     if (!(await commandSucceeds('test', ['-f', configPath]))) {
-      logError('Supabase is not initialized in this project.')
-      logInfo('Run: supabase init')
-      process.exit(1)
+      throw new Error('Supabase is not initialized in this project. Run: supabase init')
     }
   },
 
-  async prepareDestination(port: number): Promise<string> {
-    const destinationUrl = getLocalDbUrl(port)
+  async prepareDestination(destinationUrl: string): Promise<void> {
+    // Extract port from destination URL
+    let port = DEFAULT_PORT
+    try {
+      const parsed = new URL(destinationUrl)
+      if (parsed.port) {
+        port = parseInt(parsed.port, 10)
+      }
+    } catch {
+      throw new Error(`Invalid destination URL: ${destinationUrl}`)
+    }
 
     // Stop existing Supabase
     try {
@@ -178,7 +209,7 @@ export const SupabaseProvider: Provider = {
     // Wait for Postgres to be ready
     for (let i = 0; i < HEALTH_CHECK_RETRIES; i++) {
       if (await commandSucceeds('psql', [destinationUrl, '-c', 'SELECT 1'])) {
-        return destinationUrl
+        return
       }
       await sleep(HEALTH_CHECK_INTERVAL_MS)
     }
@@ -210,8 +241,9 @@ export const SupabaseProvider: Provider = {
     files.push(schemaFile)
 
     // Dump data (unless schema-only)
+    let dataFile: string | undefined
     if (!options.schemaOnly) {
-      const dataFile = path.join(options.dumpDir, `${prefix}-data.sql`)
+      dataFile = path.join(options.dumpDir, `${prefix}-data.sql`)
       await runCommand(
         'supabase',
         [
@@ -234,6 +266,9 @@ export const SupabaseProvider: Provider = {
       metadata: {
         hasRoles: true,
         hasData: !options.schemaOnly,
+        rolesFile,
+        schemaFile,
+        dataFile,
       },
     }
   },
@@ -243,7 +278,12 @@ export const SupabaseProvider: Provider = {
     destinationUrl: string,
     options: DumpOptions
   ): Promise<void> {
-    const [rolesFile, schemaFile, dataFile] = dumpResult.files
+    if (!isSupabaseDumpMetadata(dumpResult.metadata)) {
+      throw new Error(
+        'Invalid dump metadata: expected rolesFile, schemaFile, and optional dataFile'
+      )
+    }
+    const { rolesFile, schemaFile, dataFile } = dumpResult.metadata
 
     // Restore roles
     await runCommand('psql', [destinationUrl, '-f', rolesFile], { silent: true })

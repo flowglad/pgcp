@@ -4,7 +4,6 @@
  * Uses pg_dump/psql for any standard PostgreSQL database.
  */
 
-import fs from 'fs/promises'
 import path from 'path'
 import type { Provider, DumpResult, DumpOptions } from '../../types.js'
 import { runCommand } from '../../utils/commands.js'
@@ -40,6 +39,10 @@ export const VanillaPostgresProvider: Provider = {
     destinationUrl: string,
     _options: DumpOptions
   ): Promise<void> {
+    if (!dumpResult.files || dumpResult.files.length === 0) {
+      throw new Error('No dump files provided')
+    }
+
     const [dumpFile] = dumpResult.files
 
     await runCommand('psql', [destinationUrl, '-f', dumpFile], { silent: true })

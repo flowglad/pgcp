@@ -2,6 +2,8 @@
 
 PostgreSQL Copy Tool - Copy databases like `cp` copies files.
 
+> **Note:** Currently macOS only.
+
 ```bash
 npx pgcp <source_url> <destination_url>
 ```
@@ -22,8 +24,8 @@ npm install -g pgcp
 # Default mode: copy between any postgres databases
 pgcp <source> <destination>
 
-# Supabase mode: copy to local Supabase
-pgcp --supabase <source> [port]
+# Supabase mode: copy to local Supabase (manages local instance lifecycle)
+pgcp --supabase <source> <destination>
 ```
 
 ### Arguments
@@ -51,8 +53,7 @@ npx pgcp env:PROD_DATABASE_URL env:LOCAL_DATABASE_URL
 npx pgcp --schema-only env:PROD_DB env:LOCAL_DB
 
 # Supabase mode: copy Supabase DB to local Supabase (automatic setup)
-npx pgcp --supabase env:SUPABASE_DATABASE_URL
-npx pgcp --supabase env:SUPABASE_DATABASE_URL 54400  # custom port
+npx pgcp --supabase env:SUPABASE_DATABASE_URL postgresql://postgres:postgres@localhost:54322/postgres
 ```
 
 ## Environment
@@ -93,6 +94,15 @@ Automatically loads `.env` and `.env.local` from the current directory. Use the 
 5. Dumps from source: roles -> schema -> data (optional)
 6. Restores to local: roles -> grant roles -> schema -> data (triggers disabled)
 7. Cleans up dump files (unless `--keep-dumps`)
+
+## Development
+
+Requires [bun](https://bun.sh/) for development and publishing.
+
+```bash
+bun install
+bun run build
+```
 
 ## License
 
