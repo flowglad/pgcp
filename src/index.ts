@@ -137,9 +137,14 @@ function parseArgs(loadedEnv: Record<string, string>): ParsedArgs {
   // Resolve source URL
   const sourceUrl = resolveEnvVar(sourceArg, loadedEnv)
   if (!sourceUrl) {
-    const varName = sourceArg.slice(4)
-    logError(`Environment variable "${varName}" is not set.`)
-    logInfo('Check that it exists in .env.local or is exported in your shell.')
+    if (sourceArg.startsWith('env:')) {
+      const varName = sourceArg.slice(4)
+      logError(`Environment variable "${varName}" is not set.`)
+      logInfo('Check that it exists in .env.local or is exported in your shell.')
+    } else {
+      logError('Invalid source: not a valid URL or env reference.')
+      logInfo('Use a database URL or env:VARNAME syntax.')
+    }
     process.exit(1)
   }
 
@@ -152,9 +157,14 @@ function parseArgs(loadedEnv: Record<string, string>): ParsedArgs {
 
   const destinationUrl = resolveEnvVar(secondArg, loadedEnv)
   if (!destinationUrl) {
-    const varName = secondArg.slice(4)
-    logError(`Environment variable "${varName}" is not set.`)
-    logInfo('Check that it exists in .env.local or is exported in your shell.')
+    if (secondArg.startsWith('env:')) {
+      const varName = secondArg.slice(4)
+      logError(`Environment variable "${varName}" is not set.`)
+      logInfo('Check that it exists in .env.local or is exported in your shell.')
+    } else {
+      logError('Invalid destination: not a valid URL or env reference.')
+      logInfo('Use a database URL or env:VARNAME syntax.')
+    }
     process.exit(1)
   }
 
@@ -310,17 +320,8 @@ async function cleanupDumpDir(): Promise<number> {
 
   try {
     const entries = await fs.readdir(dumpDir)
-    for (const entry of entries) {
-      try {
-        await fs.unlink(path.join(dumpDir, entry))
-        if (!entry.startsWith('.')) {
-          count++
-        }
-      } catch {
-        // Ignore errors
-      }
-    }
-    await fs.rmdir(dumpDir)
+    count = entries.filter((e) => !e.startsWith('.')).length
+    await fs.rm(dumpDir, { recursive: true, force: true })
   } catch {
     // Directory might not exist
   }

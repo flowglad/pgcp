@@ -44,6 +44,9 @@ export const VanillaPostgresProvider: Provider = {
     }
 
     const [dumpFile] = dumpResult.files
+    if (!dumpFile) {
+      throw new Error('No dump files provided')
+    }
 
     await runCommand('psql', [destinationUrl, '-f', dumpFile], { silent: true })
   },
