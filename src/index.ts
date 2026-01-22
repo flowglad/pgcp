@@ -24,7 +24,6 @@ import { loadEnvFiles, resolveEnvVar } from './utils/env.js'
 
 const VERSION = '0.2.0'
 const DUMP_DIR = '.pgcp-dumps'
-const DEFAULT_SUPABASE_PORT = 54322
 
 // ============================================================================
 // Global State (for cleanup)
@@ -64,12 +63,10 @@ ${COLORS.bold}pgcp${COLORS.reset} v${VERSION} - PostgreSQL Copy Tool
 
 ${COLORS.bold}USAGE${COLORS.reset}
   pgcp [options] <source> <destination>
-  pgcp --supabase [options] <source> [port]
 
 ${COLORS.bold}ARGUMENTS${COLORS.reset}
   <source>       Source database URL or env:VARNAME
   <destination>  Destination database URL or env:VARNAME
-  [port]         Local port (for providers that manage destination)
 
 ${COLORS.bold}OPTIONS${COLORS.reset}
   ${flags.map((f) => f.padEnd(20)).join('')}Use specific provider
@@ -87,9 +84,8 @@ ${COLORS.bold}EXAMPLES${COLORS.reset}
   # Copy schema only
   pgcp --schema-only env:PROD_DB env:LOCAL_DB
 
-  # Supabase mode: copy to local Supabase (manages destination)
-  pgcp --supabase env:SUPABASE_DATABASE_URL
-  pgcp --supabase env:SUPABASE_DATABASE_URL 54400
+  # Supabase mode: copy to local Supabase (manages local instance lifecycle)
+  pgcp --supabase env:SUPABASE_DATABASE_URL postgresql://postgres:postgres@localhost:54322/postgres
 
 ${COLORS.bold}ENVIRONMENT${COLORS.reset}
   Automatically loads .env and .env.local from current directory.
@@ -107,6 +103,25 @@ function parseArgs(loadedEnv: Record<string, string>): ParsedArgs {
   // Parse other flags
   const schemaOnly = args.includes('--schema-only') || args.includes('-s')
   const keepDumps = args.includes('--keep-dumps') || args.includes('-k')
+
+  // Validate flags - detect unknown flags
+  const knownFlags = new Set([
+    ...providerFlags,
+    '--schema-only',
+    '-s',
+    '--keep-dumps',
+    '-k',
+    '--help',
+    '-h',
+  ])
+  const unknownFlags = args.filter(
+    (arg) => arg.startsWith('-') && !knownFlags.has(arg)
+  )
+  if (unknownFlags.length > 0) {
+    logError(`Unknown flag${unknownFlags.length > 1 ? 's' : ''}: ${unknownFlags.join(', ')}`)
+    console.log('\nRun "pgcp --help" for usage information.')
+    process.exit(1)
+  }
 
   // Get positional arguments
   const positional = args.filter((arg) => !arg.startsWith('-'))
@@ -128,55 +143,27 @@ function parseArgs(loadedEnv: Record<string, string>): ParsedArgs {
     process.exit(1)
   }
 
-  // For providers that manage destination, second arg is port
-  // For others, second arg is destination URL
-  const provider = getProvider(providerFlag)
+  // Second arg is required destination URL
+  if (!secondArg) {
+    logError('Missing required argument: <destination>')
+    console.log('\nRun "pgcp --help" for usage information.')
+    process.exit(1)
+  }
 
-  if (provider.managesDestination) {
-    // Second arg is optional port
-    let destinationPort: number | null = null
-    if (secondArg) {
-      const parsed = parseInt(secondArg, 10)
-      if (isNaN(parsed) || parsed < 1 || parsed > 65535) {
-        logError(`Invalid port: ${secondArg}`)
-        logInfo('Port must be a number between 1 and 65535.')
-        process.exit(1)
-      }
-      destinationPort = parsed
-    }
+  const destinationUrl = resolveEnvVar(secondArg, loadedEnv)
+  if (!destinationUrl) {
+    const varName = secondArg.slice(4)
+    logError(`Environment variable "${varName}" is not set.`)
+    logInfo('Check that it exists in .env.local or is exported in your shell.')
+    process.exit(1)
+  }
 
-    return {
-      sourceUrl,
-      destinationUrl: null,
-      destinationPort,
-      schemaOnly,
-      keepDumps,
-      providerFlag,
-    }
-  } else {
-    // Second arg is required destination URL
-    if (!secondArg) {
-      logError('Missing required argument: <destination>')
-      console.log('\nRun "pgcp --help" for usage information.')
-      process.exit(1)
-    }
-
-    const destinationUrl = resolveEnvVar(secondArg, loadedEnv)
-    if (!destinationUrl) {
-      const varName = secondArg.slice(4)
-      logError(`Environment variable "${varName}" is not set.`)
-      logInfo('Check that it exists in .env.local or is exported in your shell.')
-      process.exit(1)
-    }
-
-    return {
-      sourceUrl,
-      destinationUrl,
-      destinationPort: null,
-      schemaOnly,
-      keepDumps,
-      providerFlag,
-    }
+  return {
+    sourceUrl,
+    destinationUrl,
+    schemaOnly,
+    keepDumps,
+    providerFlag,
   }
 }
 
@@ -247,16 +234,15 @@ async function checkDestinationConnectivity(
 
 async function prepareDestination(
   provider: Provider,
-  port: number,
+  destinationUrl: string,
   steps: StepCounter
-): Promise<string> {
+): Promise<void> {
   const stepMsg = steps.next(`Preparing ${provider.name} destination`)
   spinner.start(stepMsg)
 
   try {
-    const url = await provider.prepareDestination!(port)
+    await provider.prepareDestination!(destinationUrl)
     spinner.success(stepMsg.replace('Preparing', 'Prepared'))
-    return url
   } catch (err) {
     spinner.fail(stepMsg.replace('Preparing', 'Failed to prepare'))
     throw err
@@ -433,7 +419,7 @@ async function main(): Promise<void> {
     dumpDir,
   }
 
-  let destinationUrl: string
+  const destinationUrl = parsedArgs.destinationUrl
 
   try {
     // Check prerequisites
@@ -441,14 +427,8 @@ async function main(): Promise<void> {
 
     // Prepare or check destination
     if (provider.managesDestination) {
-      const port = parsedArgs.destinationPort || DEFAULT_SUPABASE_PORT
-      destinationUrl = await prepareDestination(provider, port, steps)
+      await prepareDestination(provider, destinationUrl, steps)
     } else {
-      if (!parsedArgs.destinationUrl) {
-        logError('Destination URL is required for this provider.')
-        process.exit(1)
-      }
-      destinationUrl = parsedArgs.destinationUrl
       await checkDestinationConnectivity(destinationUrl, steps)
     }
 

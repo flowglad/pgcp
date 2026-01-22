@@ -6,11 +6,22 @@ import fs from 'fs/promises'
 import path from 'path'
 
 function unescapeDoubleQuoted(value: string): string {
-  return value
-    .replace(/\\"/g, '"')
-    .replace(/\\\\/g, '\\')
-    .replace(/\\n/g, '\n')
-    .replace(/\\t/g, '\t')
+  return value.replace(/\\(.)/g, (_, char) => {
+    switch (char) {
+      case 'n':
+        return '\n'
+      case 't':
+        return '\t'
+      case 'r':
+        return '\r'
+      case '"':
+        return '"'
+      case '\\':
+        return '\\'
+      default:
+        return char
+    }
+  })
 }
 
 function parseEnvContent(
@@ -35,6 +46,10 @@ function parseEnvContent(
   }
 }
 
+function isNodeError(err: unknown): err is NodeJS.ErrnoException {
+  return err instanceof Error && 'code' in err
+}
+
 /**
  * Load environment variables from .env and .env.local files.
  */
@@ -46,16 +61,22 @@ export async function loadEnvFiles(): Promise<Record<string, string>> {
   try {
     const content = await fs.readFile(envFile, 'utf-8')
     parseEnvContent(content, env)
-  } catch {
-    // .env doesn't exist
+  } catch (err) {
+    if (!isNodeError(err) || err.code !== 'ENOENT') {
+      throw err
+    }
+    // .env doesn't exist, which is fine
   }
 
   const envLocalFile = path.join(cwd, '.env.local')
   try {
     const content = await fs.readFile(envLocalFile, 'utf-8')
     parseEnvContent(content, env)
-  } catch {
-    // .env.local doesn't exist
+  } catch (err) {
+    if (!isNodeError(err) || err.code !== 'ENOENT') {
+      throw err
+    }
+    // .env.local doesn't exist, which is fine
   }
 
   return env

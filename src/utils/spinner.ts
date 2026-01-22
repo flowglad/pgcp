@@ -2,7 +2,7 @@
  * Terminal spinner with bouncing dots animation
  */
 
-import { COLORS } from './logging.js'
+import { COLORS, SYMBOLS } from './logging.js'
 
 const SPINNER_FRAMES = [
   '\u280B',
@@ -30,19 +30,23 @@ const BOUNCING_DOTS = [
   '..\u00B7',
 ]
 
-const SYMBOLS = {
-  check: '\u2714',
-  cross: '\u2716',
-}
-
 class Spinner {
   private intervalId: ReturnType<typeof setInterval> | null = null
   private spinnerIndex = 0
   private dotsIndex = 0
   private baseMessage = ''
+  private isRunning = false
 
   start(message: string): void {
     this.baseMessage = message.replace(/\.+\s*$/, '').trim()
+
+    // In non-TTY mode, just print the message once
+    if (!process.stdout.isTTY) {
+      console.log(`  ${this.baseMessage}...`)
+      return
+    }
+
+    this.isRunning = true
     this.spinnerIndex = 0
     this.dotsIndex = 0
     this.render()
@@ -64,7 +68,10 @@ class Spinner {
       clearInterval(this.intervalId)
       this.intervalId = null
     }
-    process.stdout.write('\r\x1b[K')
+    if (this.isRunning) {
+      process.stdout.write('\r\x1b[K')
+      this.isRunning = false
+    }
   }
 
   success(message: string): void {

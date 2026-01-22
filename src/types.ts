@@ -37,9 +37,9 @@ export interface Provider {
 
   /**
    * Prepare the destination (only called if managesDestination is true)
-   * Returns the connection URL to use
+   * Takes the destination URL provided by user
    */
-  prepareDestination?(port: number): Promise<string>
+  prepareDestination?(destinationUrl: string): Promise<void>
 
   /**
    * Dump from source database
@@ -63,8 +63,7 @@ export interface Provider {
 
 export interface ParsedArgs {
   sourceUrl: string
-  destinationUrl: string | null
-  destinationPort: number | null
+  destinationUrl: string
   schemaOnly: boolean
   keepDumps: boolean
   providerFlag: string | null
