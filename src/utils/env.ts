@@ -5,6 +5,14 @@
 import fs from 'fs/promises'
 import path from 'path'
 
+function unescapeDoubleQuoted(value: string): string {
+  return value
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+}
+
 function parseEnvContent(
   content: string,
   env: Record<string, string>
@@ -16,10 +24,9 @@ function parseEnvContent(
       if (eqIndex > 0) {
         const key = trimmed.slice(0, eqIndex).trim()
         let value = trimmed.slice(eqIndex + 1).trim()
-        if (
-          (value.startsWith('"') && value.endsWith('"')) ||
-          (value.startsWith("'") && value.endsWith("'"))
-        ) {
+        if (value.startsWith('"') && value.endsWith('"')) {
+          value = unescapeDoubleQuoted(value.slice(1, -1))
+        } else if (value.startsWith("'") && value.endsWith("'")) {
           value = value.slice(1, -1)
         }
         env[key] = value

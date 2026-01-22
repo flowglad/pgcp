@@ -210,8 +210,9 @@ export const SupabaseProvider: Provider = {
     files.push(schemaFile)
 
     // Dump data (unless schema-only)
+    let dataFile: string | undefined
     if (!options.schemaOnly) {
-      const dataFile = path.join(options.dumpDir, `${prefix}-data.sql`)
+      dataFile = path.join(options.dumpDir, `${prefix}-data.sql`)
       await runCommand(
         'supabase',
         [
@@ -234,6 +235,9 @@ export const SupabaseProvider: Provider = {
       metadata: {
         hasRoles: true,
         hasData: !options.schemaOnly,
+        rolesFile,
+        schemaFile,
+        dataFile,
       },
     }
   },
@@ -243,7 +247,11 @@ export const SupabaseProvider: Provider = {
     destinationUrl: string,
     options: DumpOptions
   ): Promise<void> {
-    const [rolesFile, schemaFile, dataFile] = dumpResult.files
+    const { rolesFile, schemaFile, dataFile } = dumpResult.metadata as {
+      rolesFile: string
+      schemaFile: string
+      dataFile?: string
+    }
 
     // Restore roles
     await runCommand('psql', [destinationUrl, '-f', rolesFile], { silent: true })

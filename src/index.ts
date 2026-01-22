@@ -444,7 +444,11 @@ async function main(): Promise<void> {
       const port = parsedArgs.destinationPort || DEFAULT_SUPABASE_PORT
       destinationUrl = await prepareDestination(provider, port, steps)
     } else {
-      destinationUrl = parsedArgs.destinationUrl!
+      if (!parsedArgs.destinationUrl) {
+        logError('Destination URL is required for this provider.')
+        process.exit(1)
+      }
+      destinationUrl = parsedArgs.destinationUrl
       await checkDestinationConnectivity(destinationUrl, steps)
     }
 
