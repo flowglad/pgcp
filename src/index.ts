@@ -247,11 +247,15 @@ async function prepareDestination(
   destinationUrl: string,
   steps: StepCounter
 ): Promise<void> {
+  if (!provider.prepareDestination) {
+    throw new Error(`Provider "${provider.name}" manages destination but doesn't implement prepareDestination`)
+  }
+
   const stepMsg = steps.next(`Preparing ${provider.name} destination`)
   spinner.start(stepMsg)
 
   try {
-    await provider.prepareDestination!(destinationUrl)
+    await provider.prepareDestination(destinationUrl)
     spinner.success(stepMsg.replace('Preparing', 'Prepared'))
   } catch (err) {
     spinner.fail(stepMsg.replace('Preparing', 'Failed to prepare'))
